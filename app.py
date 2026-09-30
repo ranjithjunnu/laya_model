@@ -40,10 +40,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Oppora Standalone Decision Service (Laya)",
     description=(
-        "Self-hosted AI Decision Engine powering Oppora GTM and multi-agent workflows. "
+        "Standalone GTM planning demo using Laya, explicit rules and configured tools. "
         "Runs on local PyTorch Laya without external LLM dependencies."
     ),
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -69,7 +69,7 @@ async def health_check() -> HealthResponse:
     return HealthResponse(
         status="ok",
         model=engine.default_model,
-        engine_ready=True,
+        engine_ready=engine.ready,
         standalone=True,
     )
 
@@ -108,16 +108,17 @@ async def make_decision(request: DecisionRequest) -> DecisionResponse:
     "/agent/plan",
     response_model=WorkflowPlan,
     tags=["Oppora GTM Agent"],
-    summary="Generate an autonomous GTM workflow plan from user objective"
+    summary="Plan a GTM workflow using Laya, explicit rules and configured templates"
 )
 async def plan_gtm_workflow(request: GTMPlanRequest) -> WorkflowPlan:
     """
-    Autonomous Oppora Agent that:
+    Standalone planning demo that:
     1. Classifies user intent.
     2. Extracts target scope (role, vertical, territory).
     3. Breaks the objective into workflow steps.
-    4. Dynamically selects Oppora tools.
-    5. Returns structured JSON with confidence and reasoning.
+    4. Maps actions to configured demo tools (no tool execution).
+    5. Returns JSON with decision sources, model scores and reasoning.
+    Uncertain or unsupported requests return no steps and a clarification.
     """
     try:
         agent = get_gtm_agent()

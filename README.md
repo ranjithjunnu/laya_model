@@ -1,194 +1,170 @@
-# Oppora Standalone Decision Service (Powered by Laya)
+# Standalone Laya decision-service demo
 
-> **Research & POC Deliverable**: Autonomous, self-hosted AI Decision Engine designed to replace expensive, high-latency LLM calls for structured GTM workflow planning, intent routing, and tool selection.
+For a visual walkthrough, file responsibilities and examples to explain to your lead, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
----
+This project demonstrates local classification and GTM workflow planning. It
+returns structured JSON; it does not execute Oppora tools, generate emails,
+send messages, or modify CRM records.
 
-## 1. Executive Summary
+The current implementation uses **PyTorch Laya**, not MLX. The lead's MLX-specific
+deliverable therefore remains a separate framework requirement to resolve.
+No hosted GPT, Claude or Jev API is called by this demo. Model weights must be
+available locally; the first setup may download them through Laya.
 
-This service implements a **100% self-hosted, standalone AI Decision Engine** using [Laya](https://github.com/convaiinnovations/laya). It operates **without any runtime dependencies on external LLMs** (no OpenAI GPT, no Anthropic Claude, and no hosted JEV API).
+## Setup and restart
 
-### Why PyTorch Laya instead of MLX?
-While Apple MLX is an efficient framework, it **only runs on Apple Silicon macOS hardware**. Production cloud infrastructure (AWS EC2, ECS, GCP, Linux Docker containers) runs on standard x86_64 CPUs or NVIDIA GPUs. Using PyTorch Laya ensures:
-1. **Local Cross-Platform Execution**: Runs on Windows, macOS, and Linux.
-2. **Cloud Portability**: Ready to containerize into Docker and deploy to Oppora's Linux microservices cluster.
+From PowerShell:
 
----
+```powershell
+cd E:\laya_decision_service
+python -m venv venv  # Only if the project environment does not already exist.
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+.\venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
 
-## 2. Architecture & File Structure
+Open <http://127.0.0.1:8000/docs>. Use POST `/agent/plan` -> Try it out.
+After a code change, stop the existing server with Ctrl+C and run the command
+again. The normal launch command does not automatically reload changed files.
+After this update the Swagger title should show version `1.1.0`.
+
+Run the separate CLI demo or regression checks:
+
+```powershell
+.\venv\Scripts\python.exe demo_client.py
+.\venv\Scripts\python.exe -m unittest test_regressions -v
+```
+
+The regression checks use deliberately incorrect model predictions to verify
+the corrections independently of model accuracy. They do not run inference.
+The CLI demo uses the real local model and prints the complete responses.
+
+## How it works
 
 ```text
-laya_decision_service/
-│
-├── taxonomy.py          # Oppora tool catalog, GTM intents, roles, industries & blueprints
-├── contracts.py         # Strict Pydantic schemas (WorkflowPlan, StepSpec, DecisionRequest)
-├── engine.py            # Singleton Laya Router wrapper with timing and warmup
-├── gtm_agent.py         # Autonomous GTM Planner Agent (Decomposition & Tool Selection)
-├── app.py               # FastAPI REST Server (exposing /health, /decision, /agent/plan)
-├── demo_client.py       # Standalone CLI demo runner executing test prompts
-├── test_choice.py       # Low-level smoke test script
-└── requirements.txt     # Minimal dependencies (laya, fastapi, uvicorn, pydantic)
+User prompt
+  -> Laya choice predictions: intent, role, industry, geography
+  -> Simple explicit-request rules preserve recognised user constraints
+  -> Intent maps to a supported workflow blueprint
+  -> Blueprint actions map to configured demo tools
+  -> Pydantic validates the structured response
 ```
 
----
+Laya scores finite choices. It does not generate the workflow JSON or reasoning
+text; Python builds those from rules, descriptions and templates. Tool selection
+is a fixed mapping, not a separate Laya comparison of all Oppora tools.
 
-## 3. How the GTM Decision Pipeline Works
+Every supported intent has a blueprint, including enrichment and incoming-reply
+classification. A missing blueprint returns `unsupported` with no steps; it
+never silently becomes an outbound workflow. Company searches do not add people
+or outreach. People searches add email verification only when email/verification
+is requested. The outbound blueprint represents discovery and qualification;
+it does not include email writing or sending.
 
-When a prompt like `"Find SaaS founders in California and generate an outbound workflow."` is received:
+An absent target is `none_specified`. This is different from an explicitly
+requested `global` location. Scope recognition uses a small keyword catalog;
+unsupported recognised targets and multiple categories require clarification.
+Arbitrary job titles, industries and locations are not comprehensively parsed.
+Full natural-language understanding, negation and mixed-operation planning remain
+limitations of this small demo.
 
-```
-[ User Prompt ]
-       │
-       ▼
-[ Stage 1: Batch Decision Head ] ──────────► Laya evaluates in parallel:
-       │                                     1. Intent     -> outbound_pipeline
-       │                                     2. Role       -> founders_c_level
-       │                                     3. Industry   -> b2b_saas
-       │                                     4. Geography  -> california_west_us
-       ▼
-[ Stage 2: Workflow Expansion ]  ──────────► Maps intent to Canonical Blueprint
-       │                                     - Step 1: discover_companies
-       │                                     - Step 2: find_decision_makers
-       │                                     - Step 3: verify_contact_data
-       │                                     - Step 4: qualify_leads
-       ▼
-[ Stage 3: Dynamic Tool Selection ] ───────► Laya scores Oppora tools for each step:
-       │                                     - Step 1 -> company_finder
-       │                                     - Step 2 -> contact_hunter
-       │                                     - Step 3 -> verify_emails
-       │                                     - Step 4 -> smart_lead_scoring
-       ▼
-[ Output: Validated Structured JSON ] ─────► Complete plan with confidence & reasoning
-```
+## Scores, sources and uncertainty
 
----
+Each decision has a source:
 
-## 4. Setup & Running Locally
+| Source | Meaning of confidence |
+| --- | --- |
+| `model_probability` | Winning-choice probability from Laya, not verified accuracy. |
+| `model_score` | Another model-provided confidence score; not verified accuracy. |
+| `explicit_rule` | `null`: a deterministic text rule matched, not a model probability. |
+| `fixed_mapping` | `null`: the blueprint specifies the tool, not a learned tool-selection score. |
+| `unavailable` | `null`: the model returned no usable score. |
 
-### Prerequisites
-* Python 3.10+
-* Virtual Environment active (`venv`)
+`model_predictions` preserves the original Laya choices and scores before rules.
+Use it to evaluate the model separately from the combined planner. Rule fixes
+do not prove an improvement in Laya's underlying classification accuracy.
 
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
+When no explicit intent rule matches, a model probability below 0.5 (or a missing
+score) returns `needs_clarification` with no steps. This is a conservative demo
+guardrail, not a calibrated production threshold. A high score still does not
+guarantee a correct decision. Tune the threshold against labelled Oppora examples.
 
-### 2. Run the Standalone CLI Demo
-To run the lead's exact demo prompt and view formatted terminal outputs:
-```bash
-python demo_client.py
-```
+Clients should check `status == "planned"` before using steps. Confidence fields
+are now nullable; display `N/A` for rules/mappings rather than formatting null as
+a percentage. The local checkpoint may emit calibration warnings. Do not describe
+the exposed probabilities as measured correctness.
 
-### 3. Start the Local API Server
-```bash
-uvicorn app:app --host 127.0.0.1 --port 8000
-```
-API Documentation (Swagger UI) is available at: `http://127.0.0.1:8000/docs`
+## Demo requests and expected behaviour
 
----
+Submit a request such as:
 
-## 5. API Reference & Sample Request/Response
-
-### `POST /agent/plan`
-Generates a structured GTM workflow plan from an unstructured request.
-
-#### Request:
 ```json
-{
-  "prompt": "Find SaaS founders in California and generate an outbound workflow."
-}
+{"prompt": "Find IT services companies in India"}
 ```
 
-#### Response:
-```json
-{
-  "workflow_id": "wf_2c84c250",
-  "user_prompt": "Find SaaS founders in California and generate an outbound workflow.",
-  "intent": {
-    "intent": "outbound_pipeline",
-    "confidence": 0.3348,
-    "probabilities": {
-      "outbound_pipeline": 0.3348,
-      "contact_hunting": 0.1414,
-      "enrichment_only": 0.1441,
-      "crm_cleanup": 0.1538,
-      "inbound_triage": 0.2259
-    },
-    "reasoning": "Build a cold outbound prospecting campaign from scratch to discover, qualify, and engage new target accounts and decision-makers."
-  },
-  "target_scope": {
-    "role": "founders_c_level",
-    "role_confidence": 0.4812,
-    "industry": "b2b_saas",
-    "industry_confidence": 0.4509,
-    "geography": "california_west_us",
-    "geography_confidence": 0.5251
-  },
-  "steps": [
-    {
-      "step_number": 1,
-      "action": "discover_companies",
-      "tool": "company_finder",
-      "tool_description": "Search for company entities, organizations, and firmographics matching specific industries, employee sizes, and geographic locations.",
-      "confidence": 0.85,
-      "reasoning": "Establish target account list matching industry and geographic parameters. Selected 'company_finder' for discover_companies."
-    },
-    {
-      "step_number": 2,
-      "action": "find_decision_makers",
-      "tool": "contact_hunter",
-      "tool_description": "Discover individual decision-makers, executives, founders, and their verified names and candidate email addresses inside target companies.",
-      "confidence": 0.85,
-      "reasoning": "Identify relevant founders and leadership roles within discovered accounts. Selected 'contact_hunter' for find_decision_makers."
-    },
-    {
-      "step_number": 3,
-      "action": "verify_contact_data",
-      "tool": "verify_emails",
-      "tool_description": "Verify deliverability, analyze SMTP responses, and filter dead or bouncing email addresses to protect domain sender reputation.",
-      "confidence": 0.85,
-      "reasoning": "Execute deliverability checks to protect domain reputation before sending. Selected 'verify_emails' for verify_contact_data."
-    },
-    {
-      "step_number": 4,
-      "action": "qualify_leads",
-      "tool": "smart_lead_scoring",
-      "tool_description": "Score, rank, and qualify leads and companies against an Ideal Customer Profile (ICP) and qualification filters.",
-      "confidence": 0.85,
-      "reasoning": "Score leads against ICP parameters to prioritize highest-fit prospects. Selected 'smart_lead_scoring' for qualify_leads."
-    }
-  ],
-  "total_latency_ms": 42.18,
-  "model_used": "typed-decisions",
-  "standalone": true
-}
-```
+| Prompt | Expected intent and plan |
+| --- | --- |
+| Find IT services companies in India | `account_discovery`; IT services, India; company finder only. |
+| Find VP of engineering in the USA | `contact_hunting`; engineering leaders, US; no invented industry; contact hunter only. |
+| Find SaaS founders in California and generate an outbound workflow. | `outbound_pipeline`; SaaS, founders, California; discover, find contacts, verify, qualify. |
+| Enrich existing company records with missing firmographics. | `enrichment_only`; enrich existing records; no invented target scope. |
+| Classify incoming sales replies and out-of-office responses. | `inbound_triage`; classify incoming messages only. |
+| Find companies | `account_discovery`; all target fields unspecified; company finder only. |
 
----
+`sample_responses.json` contains real local-model responses captured during
+verification of this update. IDs, model scores and latency can change on a later
+run. No production accuracy or cost savings have been established.
 
-## 6. How Oppora Can Integrate This Service Later
+## API and files
 
-Oppora's multi-agent backend can integrate this service via a lightweight HTTP client or internal RPC:
+- GET `/health`: readiness after successful model warmup. Failed warmup prevents startup.
+- POST `/decision`: raw Laya choice decisions without planner correction rules.
+- POST `/agent/plan`: combined planner, sources, raw predictions, status and ordered steps.
+- `taxonomy.py`: supported choices, scope keywords, demo tools and all six blueprints.
+- `gtm_agent.py`: explicit rules, clarification guardrail and plan construction.
+- `engine.py`: local Laya Router and score parsing.
+- `contracts.py`: Pydantic request/response schemas.
+- `app.py`: FastAPI server.
+- `demo_client.py`: six standalone demo requests.
+- `test_regressions.py`: checks for the observed failures and response semantics.
+
+## Later Oppora integration
+
+The Oppora assessment identified bounded decisions such as Ask Ora routing,
+Finder mode/source selection, semantic lead fit, evidence matching and workflow
+branches. This prototype's six GTM intents are not Oppora's seven specialist-agent
+routes. Integration requires the real tool registry, current conversation/task
+state and production examples; changing the model dropdown alone is insufficient.
+
+Oppora could call the service with an internal HTTP client:
 
 ```python
 import httpx
 
-class OpporaDecisionClient:
-    def __init__(self, base_url: str = "http://decision-service.internal:8000"):
-        self.client = httpx.Client(base_url=base_url, timeout=2.0)
-
-    def plan_workflow(self, prompt: str) -> dict:
-        response = self.client.post("/agent/plan", json={"prompt": prompt})
-        response.raise_for_status()
-        return response.json()
+response = httpx.post(
+    "http://decision-service.internal:8000/agent/plan",
+    json={"prompt": "Find IT services companies in India"},
+    timeout=30.0,
+)
+response.raise_for_status()
+plan = response.json()
+if plan["status"] != "planned":
+    # Present clarification or use the existing Oppora fallback.
+    pass
+else:
+    # Validate real tool names, constraints and permissions before execution.
+    pass
 ```
 
-### Cost & Latency Comparison
+`context` is accepted for future integration but is currently unused. Tool names
+are demo labels, including the new `company_enrichment` planning label, not an
+assertion that a corresponding production API exists. Keep generative LLMs for
+writing and research synthesis; code should enforce exact filters and execute
+approved tools.
 
-| Metric | GPT-4o / Claude 3.5 | Oppora Laya Decision Service | Improvement |
-| :--- | :--- | :--- | :--- |
-| **P95 Latency** | 1,200 ms – 2,500 ms | **20 ms – 50 ms** | **~30x–50x faster** |
-| **Cost per 1M Decisions** | $2,500 – $10,000+ | **$0 (Self-Hosted Fixed Compute)** | **>95% Cost Reduction** |
-| **Determinism** | Prompt-drift & hallucinations | **Fixed taxonomy & schema guarantees** | **100% Type-Safe** |
-| **Privacy / VPC** | Data leaves VPC to OpenAI | **100% Internal VPC Execution** | **Zero Data Leakage** |
+## Performance
+
+The pre-update local API check observed roughly 4.7–6.5 seconds per plan on this
+CPU environment. This is a small observation, not a P95 benchmark. The verification
+samples record updated per-request latency. Measure on the intended hardware and
+representative workloads before claiming speedups or savings. Self-hosting still
+has compute and operational costs.

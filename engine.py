@@ -1,7 +1,7 @@
 """
 engine.py — Core Laya Decision Engine Wrapper.
 
-Provides a thread-safe singleton wrapper around Laya's Router with:
+Provides a singleton wrapper around Laya's Router with:
 - Warm-up and pre-loading on startup (no repeated downloads or model loads).
 - Precise millisecond latency measurements.
 - Safe parsing and extraction of choices, probabilities, and confidence scores.
@@ -36,14 +36,16 @@ class DecisionEngine:
             return
 
         logger.info("Initializing Laya DecisionEngine...")
+        self.ready = False
         self.router = Router()
         self.default_model = "typed-decisions"
         self._warmup()
+        self.ready = True
         self._initialized = True
         logger.info("Laya DecisionEngine ready.")
 
     def _warmup(self) -> None:
-        """Runs a quick warm-up query to compile graphs and ensure model is warm."""
+        """Load and exercise the model before reporting readiness."""
         try:
             logger.info("Warming up decision model...")
             dummy_state = "Warmup system state"
@@ -57,7 +59,8 @@ class DecisionEngine:
             self.router.predict(dummy_state, dummy_questions, model=self.default_model)
             logger.info("Warmup complete.")
         except Exception as e:
-            logger.warning(f"Engine warmup warning (non-fatal): {e}")
+            logger.error(f"Engine warmup failed: {e}")
+            raise
 
     def decide(
         self,
@@ -94,23 +97,28 @@ class DecisionEngine:
             raw_probs = answer_data.get("probabilities", {})
             probabilities = {k: round(float(v), 4) for k, v in raw_probs.items()}
 
-            # Use answer_confidence or winning choice probability as intuitive confidence
+            # Preserve scores without describing them as calibrated accuracy.
             winner_prob = probabilities.get(choice)
             ans_conf = answer_data.get("answer_confidence")
             raw_conf = answer_data.get("confidence")
 
             if winner_prob is not None:
                 confidence = float(winner_prob)
+                source = "model_probability"
             elif ans_conf is not None:
                 confidence = float(ans_conf)
+                source = "model_score"
             elif raw_conf is not None:
                 confidence = float(raw_conf)
+                source = "model_score"
             else:
-                confidence = 0.85
+                confidence = None
+                source = "unavailable"
 
             parsed_answers[qid] = ChoiceAnswer(
                 choice=choice,
-                confidence=round(confidence, 4),
+                confidence=round(confidence, 4) if confidence is not None else None,
+                source=source,
                 probabilities=probabilities
             )
 
