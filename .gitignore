@@ -1,0 +1,19 @@
+# Virtual environment (dependencies) - never push to GitHub
+venv/
+.venv/
+env/
+
+# Python compiled cache files
+__pycache__/
+*.py[cod]
+
+# Secrets and environment variables
+.env
+
+# Editor / IDE configuration files
+.vscode/
+.idea/
+
+# OS temporary files
+.DS_Store
+Thumbs.db
