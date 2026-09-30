@@ -127,39 +127,7 @@ run. No production accuracy or cost savings have been established.
 - `demo_client.py`: six standalone demo requests.
 - `test_regressions.py`: checks for the observed failures and response semantics.
 
-## Later Oppora integration
 
-The Oppora assessment identified bounded decisions such as Ask Ora routing,
-Finder mode/source selection, semantic lead fit, evidence matching and workflow
-branches. This prototype's six GTM intents are not Oppora's seven specialist-agent
-routes. Integration requires the real tool registry, current conversation/task
-state and production examples; changing the model dropdown alone is insufficient.
-
-Oppora could call the service with an internal HTTP client:
-
-```python
-import httpx
-
-response = httpx.post(
-    "http://decision-service.internal:8000/agent/plan",
-    json={"prompt": "Find IT services companies in India"},
-    timeout=30.0,
-)
-response.raise_for_status()
-plan = response.json()
-if plan["status"] != "planned":
-    # Present clarification or use the existing Oppora fallback.
-    pass
-else:
-    # Validate real tool names, constraints and permissions before execution.
-    pass
-```
-
-`context` is accepted for future integration but is currently unused. Tool names
-are demo labels, including the new `company_enrichment` planning label, not an
-assertion that a corresponding production API exists. Keep generative LLMs for
-writing and research synthesis; code should enforce exact filters and execute
-approved tools.
 
 ## Performance
 
